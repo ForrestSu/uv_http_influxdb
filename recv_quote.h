@@ -24,7 +24,8 @@ enum EConnStatus{
     Recving = 2,
 };
 typedef struct tcp_msg_tag{
-    void* pself; //save TcpClient pointer
+    void* pself; //save Consumer pointer
+    int conn_idx;
     int32_t capcity; // alloc total size
     int32_t size; // used_bytes
     struct tcp_msg_tag *next;
@@ -34,7 +35,7 @@ typedef struct tcp_msg_tag{
 //snapshot/tick msg
 typedef struct marketdata_task_tag{
     void* pself;
-	int file_hdl; //file
+	int file_hdl; //file handle
 	char* tcp_header;
 	int tcp_header_len;
 	int tcp_dollar_pos; // dollar position
@@ -95,8 +96,11 @@ public:
 	bool InitTCP(const std::string& tcp_addr, const std::string& dbname, int port, int cnt);
 	//call by another thread
 	int SendAsync(marketdata_task* data);
+public:
+	std::queue<tcp_msg_tag*> m_msgqueue;
 private:
 	static void OnAsync(uv_async_t* handle);
+	static void OnTimer(uv_timer_t* handle);
 private:
 	uv_loop_t  * m_loop;
 	uv_mutex_t m_mtx;
@@ -106,8 +110,9 @@ private:
 	char *m_header;
 	int m_headerlen;
 	int m_dollarpos;
-public:
-	int m_index;
+
+	uv_timer_t * m_timer;
+	bool m_timer_stop;
 	std::vector<std::shared_ptr<TcpClient>> m_tcpConn;
 };
 

@@ -58,7 +58,7 @@ const char HTTP_HEADER[] = "POST /write?db=%s&u=toptrade&p=toptrade&precision=ns
 //cpu,host=serverCode,region=china_code value=0.111 1520320877369812809";
 
 const int MAX_MSGBUFF_SIZE = (32 << 20); //32M , default is 64M
-const int MAX_TCPMSG_SIZE = (24 << 20) ; // 20M , default udpmsg is less than 1200
+const int MAX_TCPMSG_SIZE = (32 << 20) ; // 20M , default udpmsg is less than 1200
 const int PRINT_BYTE_SIZE = 1024; //1K
 // debug
 int32_t TOTAL_REDUCE_TCP_PACK = 0;
@@ -269,7 +269,10 @@ Consumer::Consumer(uv_loop_t* loop)
     m_header = nullptr;
     m_headerlen = 0;
     m_dollarpos = 0;
-    m_index = 0;
+
+    m_timer_stop = true;
+    m_timer = (uv_timer_t *)malloc(sizeof(uv_timer_t));
+    uv_timer_init(m_loop, m_timer);
 }
 Consumer::~Consumer()
 {
@@ -298,10 +301,55 @@ bool Consumer::InitTCP(const std::string& tcp_addr, const std::string& dbname, i
         }
     }
     printf("total tcpConn is %d, m_dollarpos = %d!\n",cnt, m_dollarpos);
+
+    m_timer->data = this;
+    uv_timer_start(m_timer, Consumer::OnTimer, 1000, 10);//repeat 10ms
     return true;
 }
+void Consumer::OnTimer(uv_timer_t* handle)
+{
+    Consumer * self = (Consumer*) (handle->data);
+    // nothing to do
+    if(self->m_msgqueue.size() ==0)
+        return ;
+   // bool allbusy = true;
+    //有数据需要发送
+    for(size_t i=0;i < self->m_tcpConn.size();++i)
+    {
+        if( self->m_tcpConn[i]->m_state == EConnStatus::Avail)
+        {
+           // allbusy = false;
+            if( self->m_msgqueue.size() == 0){
+                break;
+            }
+            tcp_msg_tag* pNode = self->m_msgqueue.front();
+            self->m_msgqueue.pop();
+
+            // mark as used!
+            // printf("handle: %ld is sending...\n", i);
+            self->m_tcpConn[i]->m_state = EConnStatus::Sending;
+            pNode->pself = self;
+            pNode->conn_idx = i;
+
+            uv_buf_t buf = uv_buf_init(pNode->data, pNode->size);
+            uv_write_t * request = (uv_write_t*) malloc(sizeof(uv_write_t));
+            request->data = pNode; // for release node
+
+            uv_write(request, self->m_tcpConn[i]->m_connect->handle, &buf, 1, on_tcp_send);
+        }else if( self->m_tcpConn[i]->m_state == -1)
+        {
+            // reconnect()
+            self->m_tcpConn[i]->Reconnect();
+        }
+    }
+   // if(allbusy)
+   // printf("All TCP connecting is busy... queue size %ld!\n", self->m_msgqueue.size());
+}
+
 void on_tcp_send(uv_write_t* req, int status) {
-    TcpClient *pTcp = (TcpClient *)( ((tcp_msg_tag*)(req->data))->pself);
+    tcp_msg_tag* pNode = (tcp_msg_tag*)(req->data);
+    Consumer *self = (Consumer *)(pNode->pself);
+    TcpClient *pTcp = self->m_tcpConn[pNode->conn_idx].get();
     if (status == 0){
         if (req)
         {
@@ -318,6 +366,8 @@ void on_tcp_send(uv_write_t* req, int status) {
         }
     }else{
         pTcp->m_state = EConnStatus::Disconn;
+        self->m_msgqueue.push(pNode);
+
         fprintf(stderr,"send tcp error! mid:%d ,%s!\n", pTcp->m_id, uv_strerror(status));
     }
 }
@@ -743,18 +793,19 @@ void JobDone(uv_work_t *req, int status) {
             request->data = pNode; // for release node
             uv_fs_write(req->loop, request, ptask->file_hdl, &buf, 1, -1, on_write_done);
             */
-            // TODO send tcp
+            /*
             uv_buf_t buf = uv_buf_init(pNode->data, pNode->size);
             uv_write_t * request = (uv_write_t*) malloc(sizeof(uv_write_t));
             request->data = pNode; // for release node
-            pNode->pself = pCon->m_tcpConn[pCon->m_index].get();
-            uv_write(request, pCon->m_tcpConn[pCon->m_index]->m_connect->handle , &buf, 1, on_tcp_send);
-            pCon->m_index = (pCon->m_index + 1) % (pCon->m_tcpConn.size()) ;
+            uv_write(request, ((uv_connect_t *)(ptask->tcp_conn))->handle, &buf, 1, on_tcp_send);
+             */
+            //TODO send tcp
+            pCon->m_msgqueue.push(pNode);
             // move to next
             pNode = pNode->next;
             ++TOTAL_REDUCE_TCP_PACK;
         }
-        printf("JobDone: release! distribute TCP pack.\n");
+        printf("JobDone: release! distribute UDP.\n");
         free(req->data);
     }
     free(req);
