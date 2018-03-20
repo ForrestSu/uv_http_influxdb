@@ -7,99 +7,41 @@
 #include <fcntl.h>
 #include <stddef.h>
 
-#define IS_LEAP_YEAR(y)  (((y)%4==0 && (y)%100!=0)||(y)%400==0)
 #include "../../emsproto/quote.pb.h"
-//#pragma GCC diagnostic ignored "-Wformat="
-
-//public
-void on_close_cb(uv_handle_t* handle){
-    free(handle);
-}
 
 static void Job(uv_work_t *req);
 static void JobDone(uv_work_t *req, int status);
+void del_async_cb(uv_handle_t* handle);
 void on_write_done(uv_fs_t *req);
 void on_udp_send(uv_udp_send_t *req, int status);
 // create an udp_msg node
-tcp_msg * get_tcp_node(int buffsize);
+udp_msg * get_udp_node(const string* msgsrc);
 
-//tcp
+const char format_snap[] = "market,date=%d,exch=%d,code=%s status=%d,lastprice=%.2f,prevclose=%.2f,open=%.2f,high=%.2f,low=%.2f,volume=%lld,value=%.2f,highlimited=%.2f,lowlimited=%.2f,niopv=%.4f,numtrades=%d,totalBidVol=%lld,totalAskVol=%lld";
 
-void alloc_tcp_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf);
-void on_tcp_recvmsg(uv_stream_t* handle, ssize_t nread, const uv_buf_t* buf);
-void on_tcp_send(uv_write_t* req, int status);
+const char format_tick[] = "tick,trade_date=%d,exch=%d,code=%s price=%.2f,nIndex=%d,volume=%lld,turnover=%.2f,nBSFlag=%d,chOrderKind=%d,chFunctionCode=%d,nAskOrder=%d,nBidOrder=%d %lld%06d\n";
 
-typedef struct snap_extend_tag{
-    int level;
-    const char * measure;
-    const char * exfileds;
-}snap_extend;
+const int MAX_MSGBUFF_SIZE = 32 * 1024 * 1024; //64M
+const int MAX_UDPMSG_SIZE =  1300 ; // 8K
 
-const char format_market[] = "%s,trade_date=%d,exchg=%d,security_id=%s status=%d,trade_time=%d,last_px=%.2f,prev_close_px=%.2f,open_px=%.2f,high_px=%.2f,low_px=%.2f,total_volume_traded=%lld,total_value_traded=%.2f,high_limit_px=%.2f,low_limit_px=%.2f";
-snap_extend SnapExts[2]={
-        {10, "market", ",iopv=%.4f,num_traded=%d,total_bid_qty=%lld,total_offer_qty=%lld,weighted_avg_bid_px=%.2f,weighted_avg_offer_px=%.2f"},
-        {5, "future", ",settle_px=%.2f,prev_settle_px=%.2f,delta=%.4f,prev_delta=%.4f,openinterest=%.2f,prev_openinterest=%.2f"}
-};
+///debug
+int32_t TOTAL_REDUCE_UDP_PACK = 0;
+int32_t TOTAL_FREE_UDP_PACK = 0;
 
-const char format_index[] = "index,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,open_px=%lld,high_px=%lld,low_px=%lld,last_px=%lld,prev_close_px=%lld,total_volume_traded=%lld,total_value_traded=%lld,seqno=%llu %lld000000\n";
-
-const char format_tick[] = "tick,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,trade_ref=%d,trade_price=%.2f,trade_qty=%lld,trade_money=%.2f,ord_type=%d,trade_code=%d,bid_appl_seqnum=%d,offer_appl_seqnum=%d,seqno=%llu %lld%06d\n";
-
-const char format_order[] = "order,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,price=%.2f,appl_seqnum=%d,order_qty=%d,ord_type=%d,trade_code=%d,seqno=%llu %lld000000\n";
-const char format_queue[] = "queue,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,price=%.2f,num_orders=%d,side=%d,no_orders=%d";//OrderQty%d=%d ...%lld
-const char HTTP_HEADER[] = "POST /write?db=%s&u=toptrade&p=toptrade&precision=ns HTTP/1.1\r\n"\
-"Host: %s:%d\r\n"
-"Content-Length:        $\r\n" \
-"Connection: Keep-Alive\r\n" \
-"User-Agent: uvHttpClient/1.1\r\n" \
-"Accept: */*\r\n" \
-"Content-Type: application/x-www-form-urlencoded\r\n" \
-"Expect: 100-continue\r\n\r\n";
-//cpu,host=serverCode,region=china_code value=0.111 1520320877369812809";
-
-const int MAX_MSGBUFF_SIZE = (32 << 20); //32M , default is 64M
-const int MAX_TCPMSG_SIZE = (24 << 20) ; // 20M , default udpmsg is less than 1200
-const int PRINT_BYTE_SIZE = 1024; //1K
-// debug
-int32_t TOTAL_REDUCE_TCP_PACK = 0;
-int32_t TOTAL_FREE_TCP_PACK = 0;
-
-//calculate the date of milliseconds since 1970-01-01
-const int gCalcYears = 300;
-static int gYearOfDay[gCalcYears]={0};
-static int InitYearOfDays(int years) {
-    for (int i = 1; i < years; ++i)
-        gYearOfDay[i] = gYearOfDay[i-1] + 365 + IS_LEAP_YEAR(1970 + i-1);
-    return years;
-}
-int g_init_years = InitYearOfDays(gCalcYears);
-//cost 16.73 ms/10^6times !
-// CalcMsUTC(20180308);
-static int64_t CalcMsUTC(int idate)
+static int64_t GetDateSecond(int idate)
 {
-    /*static int months[12]={31,28,31,30,31,30,31,31,30,31,30,31};*/
-    static int MonthOfDay[13] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365 };
-    int year, month, days;
-    year = idate / 10000;
-    month = (idate / 100 % 100);
-    days = (idate % 100);
-    int64_t diffms = (year < (1970 + gCalcYears) ? gYearOfDay[year - 1970] : 0);
-    diffms += (MonthOfDay[month - 1] + days - 1);
-    if (month > 2 && IS_LEAP_YEAR(year))
-        diffms += 1;
-    return ((diffms * 86400 - 28800) * 1000); //BeiJing - 8 hour => UTC
+	struct tm datetime = {0};
+	char temp[12];
+    sprintf(temp,"%08d",idate);
+    sscanf(temp,"%04d%02d%02d",&(datetime.tm_year),
+    		&(datetime.tm_mon),&(datetime.tm_mday));
+	datetime.tm_mon -= 1; //0-11
+	datetime.tm_year -= 1900; //1900
+	time_t datesecond = mktime(&datetime);
+	return ((int64_t)datesecond);
 }
 
-int GetCurTime()
-{
-    struct tm *local;
-    time_t t;
-    t = time(NULL);
-    local = localtime(&t);
-    return local->tm_hour*10000+local->tm_min*100+local->tm_sec;
-}
-
-MarketProvider::MarketProvider(uv_loop_t *loop, const std::string& saddr, const std::string& topic, const char* filename, Consumer* pwork)
+MarketProvider::MarketProvider(uv_loop_t *loop, const string& saddr, const string& topic, const char* filename, Consumer* pwork)
 {
 	m_loop = loop;
     m_run = false;
@@ -107,7 +49,7 @@ MarketProvider::MarketProvider(uv_loop_t *loop, const std::string& saddr, const 
     m_topic = topic;
     // init zmq
     m_ctx = zmq::context_t(1);
-    m_socket = std::make_shared<zmq::socket_t>(m_ctx, ZMQ_SUB);
+    m_socket = make_shared<zmq::socket_t>(m_ctx, ZMQ_SUB);
     m_tid = 0 ;
     m_work = pwork;
 
@@ -145,14 +87,14 @@ void MarketProvider::thread_func(void *pParam)
 		{
 			//printf("recv EAGAIN!\n");
 			if (ptask == nullptr) {
-			    printf(">>>Time:%d ,TOTAL_REDUCE_TCP_PACK: %d ,TOTAL_FREE_TCP_PACK: %d .\n", GetCurTime(), TOTAL_REDUCE_TCP_PACK, TOTAL_FREE_TCP_PACK);
-				//usleep(1000000); //1s
+			    printf(">>> TOTAL_REDUCE_UDP_PACK: %d ,TOTAL_FREE_UDP_PACK: %d .\n", TOTAL_REDUCE_UDP_PACK, TOTAL_FREE_UDP_PACK);
+				usleep(1000000); //1s
 				continue;
 			}
 			++failcnt;
 			if (failcnt > 4) {
 				printf("[%s]Continuous timeout %d times! send last %d packs.\n"
-						,self->m_topic.c_str(), failcnt, ptask->total_packs);
+						,self->m_topic.c_str(), failcnt, ptask->total);
 				self->m_work->SendAsync(ptask);
 				ptask = nullptr;
 				failcnt = 0;
@@ -169,13 +111,11 @@ void MarketProvider::thread_func(void *pParam)
             {
             	ptask = (marketdata_task*) malloc(MAX_MSGBUFF_SIZE);
             	//memset(task->data, 0, sizeof(M_BUFF_SIZE));
-            	ptask->pself = nullptr;
             	ptask->file_hdl = self->m_filehdl;
-            	ptask->tcp_header = nullptr;
-            	ptask->tcp_header_len = 0;
-            	ptask->tcp_dollar_pos = 0;
+            	ptask->udp_hdl = nullptr;
+            	ptask->udp_addr = nullptr;
             	ptask->udp_msg_ptr = nullptr;
-            	ptask->total_packs = 0;
+            	ptask->total = 0;
             	ptask->used_bytes = 0;
             }
 
@@ -184,14 +124,14 @@ void MarketProvider::thread_func(void *pParam)
             ptask->used_bytes += sizeof(msg_len);
             memcpy( (ptask->data + ptask->used_bytes), msg.data(), msg.size()); // msg
             ptask->used_bytes += msg_len;
-            ptask->total_packs++;
+            ptask->total++;
             //if full, send msg to another thread
-            if( (MAX_MSGBUFF_SIZE - ptask->used_bytes) < 10 * 1024)
+            if( (MAX_MSGBUFF_SIZE - ptask->used_bytes) < 20 * 1024)
             {
             	if(self->m_work->SendAsync(ptask) )
             	    printf("error: fail to  send async !\n");
             	double cost = timems.stop();
-            	printf("Recv speed: %.2f byte/ms, %d packs!  %.2f packs/ms.\n", ptask->used_bytes/cost, ptask->total_packs, ptask->total_packs/cost);
+            	printf("Recv speed: %.2f byte/ms, %d packs!  %.2f packs/ms.\n", ptask->used_bytes/cost, ptask->total, ptask->total/cost);
             	timems.start();
             	ptask = nullptr;
             }
@@ -213,50 +153,6 @@ bool MarketProvider::Stop()
 	return true;
 }
 
-//////
-TcpClient::TcpClient(uv_loop_t* loop, const std::string& tcp_addr, int port, int id){
-    m_id = id;
-    m_loop = loop;
-    m_tcpaddr = (struct sockaddr_in*)malloc(sizeof(struct sockaddr_in));
-    uv_ip4_addr(tcp_addr.c_str(), port, m_tcpaddr);
-
-    m_socket = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
-    uv_tcp_init(m_loop, m_socket);
-    uv_tcp_keepalive(m_socket, 1, 600); // 60 seconds
-    uv_tcp_nodelay(m_socket,1);
-
-    m_state = EConnStatus::Disconn;
-    m_connect = (uv_connect_t*)malloc(sizeof(uv_connect_t));
-    m_connect->data = this;
-    uv_tcp_connect(m_connect, m_socket, (const struct sockaddr*)m_tcpaddr, TcpClient::on_tcp_connect);
-}
-
-TcpClient::~TcpClient() {
-    m_state = EConnStatus::Disconn;
-    if (m_connect)
-        free(m_connect);
-    if (m_socket) {
-        uv_close((uv_handle_t*) m_socket, on_close_cb);
-    }
-}
-bool TcpClient::Reconnect()
-{
-    int ret = uv_tcp_connect(m_connect, m_socket, (const struct sockaddr*)m_tcpaddr, TcpClient::on_tcp_connect);
-    printf("Reconnect! handle:%d, retCode:%d:%s !\n", m_id, ret, uv_strerror(ret));
-    return (ret == 0);
-}
-void TcpClient::on_tcp_connect(uv_connect_t* req, int status) {
-    TcpClient* self = (TcpClient*) (req->data);
-    if (status != 0) {
-        self->m_state = EConnStatus::Disconn;
-        fprintf(stderr, "New tcp connection error: %s\n", uv_strerror(status));
-    } else {
-        self->m_state = EConnStatus::Avail;
-        printf("tcp-connected! m_id:%d.\n", self->m_id);
-    }
-}
-
-/////
 Consumer::Consumer(uv_loop_t* loop)
 {
 	m_loop = loop;
@@ -264,100 +160,39 @@ Consumer::Consumer(uv_loop_t* loop)
 
 	m_async_hdl = (uv_async_t*)malloc(sizeof(uv_async_t));
     uv_async_init(this->m_loop, m_async_hdl, Consumer::OnAsync);
-    m_tasks.clear();
 
-    m_header = nullptr;
-    m_headerlen = 0;
-    m_dollarpos = 0;
-    m_index = 0;
+    // optional
+    m_udp_addr = nullptr;
+    m_udp_hdl = nullptr;
 }
+bool Consumer::InitUDP(const string& udp_addr, int port)
+{
+    m_udp_addr = (struct sockaddr_in*)malloc(sizeof(struct sockaddr_in));
+    uv_ip4_addr(udp_addr.c_str(), port, m_udp_addr);
+
+    m_udp_hdl = (uv_udp_t*)malloc(sizeof(uv_udp_t));
+    uv_udp_init(m_loop, m_udp_hdl);
+    return true;
+}
+
 Consumer::~Consumer()
 {
     uv_mutex_destroy(&m_mtx);
     //write a release function by ourself.
-    uv_close((uv_handle_t*)m_async_hdl, on_close_cb);
-
-    // free tcp, clear vector
-    m_tcpConn.clear();
-    // free tcp addr
-    if (m_header) free(m_header);
+    uv_close((uv_handle_t*)m_async_hdl, del_async_cb);
+    if(m_udp_addr){
+        free(m_udp_addr);
+    }
+    if(m_udp_hdl){
+        free(m_udp_hdl);
+    }
 }
 
-bool Consumer::InitTCP(const std::string& tcp_addr, const std::string& dbname, int port, int cnt)
+void del_async_cb(uv_handle_t* handle)
 {
-    for (int i = 0; i < cnt; ++i) {
-        m_tcpConn.push_back(std::make_shared<TcpClient>(m_loop, tcp_addr, port, i));
-    }
-    int header_len = sizeof(HTTP_HEADER) + 128;
-    m_header = (char*) malloc(header_len);
-    m_headerlen = snprintf(m_header, header_len, HTTP_HEADER, dbname.c_str(), tcp_addr.c_str(),port);
-    for (int i = 0; i < m_headerlen; ++i) {
-        if (m_header[i] == '$') {
-            m_dollarpos = i;
-            break;
-        }
-    }
-    printf("total tcpConn is %d, m_dollarpos = %d!\n",cnt, m_dollarpos);
-    return true;
-}
-void on_tcp_send(uv_write_t* req, int status) {
-    TcpClient *pTcp = (TcpClient *)( ((tcp_msg_tag*)(req->data))->pself);
-    if (status == 0){
-        if (req)
-        {
-            pTcp->m_state = EConnStatus::Recving;
-            req->handle->data = pTcp;
-            uv_read_start(req->handle, alloc_tcp_buffer, on_tcp_recvmsg);
-            if (req->data)
-            {
-                // printf("release!  ");
-                free(req->data);
-            }
-            ++TOTAL_FREE_TCP_PACK;
-            free(req);
-        }
-    }else{
-        pTcp->m_state = EConnStatus::Disconn;
-        fprintf(stderr,"send tcp error! mid:%d ,%s!\n", pTcp->m_id, uv_strerror(status));
-    }
+    free(handle);
 }
 
-void alloc_tcp_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
-{
-    int size = 1024;
-    buf->base = (char*) malloc(size);
-    buf->len = size;
-}
-
-void on_tcp_recvmsg(uv_stream_t* handle, ssize_t nread, const uv_buf_t* buf)
-{
-    TcpClient *pTcp = (TcpClient *)(handle->data);
-
-    if (nread <= 0) {
-        printf("ERROR: recv msg error: nread = %lld!\n", nread);
-    } else {
-        //HTTP/1.1 204 No Content
-        if (buf->base) {
-            if( buf->base[9]=='1' && buf->base[10]=='0' && buf->base[11]=='0' ){
-                // try to read 204 response
-               uv_read_start(handle, alloc_tcp_buffer, on_tcp_recvmsg);
-               //printf("handle: %d <HTTP/1.1 100 Continue>\n", pTcp->m_id);
-
-            }else if ( buf->base[9]=='2' && buf->base[10]=='0' && buf->base[11]=='4' ){
-                // successful
-                pTcp->m_state = EConnStatus::Avail;
-               // printf("handle: %d <HTTP/1.1 204 No Content>\n", pTcp->m_id);
-
-            } else {
-                printf("ERROR! handle:%d recv msg:\n[%s]\n!", pTcp->m_id, buf->base);
-            }
-        }
-    }
-    if (buf->base)
-        free(buf->base);
-}
-
-////write file
 void on_write_done(uv_fs_t *req) {
     if (req) {
         uv_fs_req_cleanup(req);
@@ -366,7 +201,7 @@ void on_write_done(uv_fs_t *req) {
             free(req->data);
         }
         free(req);
-        ++TOTAL_FREE_TCP_PACK;
+        ++TOTAL_FREE_UDP_PACK;
     }
 }
 
@@ -379,46 +214,28 @@ void on_udp_send(uv_udp_send_t *req, int status) {
         if (req->data)
             free(req->data);
         free(req);
-       ++TOTAL_FREE_TCP_PACK;
+       ++TOTAL_FREE_UDP_PACK;
     }
 }
 
-/**
- * @param pfrom
- * @param sizes
- * @param pstr
- * @return int : the size of bytes writed into char* pstr
- */
-int UnPackMsg2Str(const void *pfrom, const int sizes, char *pstr)
+bool UnPackMsg2Str(int itype, const string& msg, string *result_str)
 {
-    PB::MSGCARRIER::MsgCarrier mc;
-    if(mc.ParseFromArray(pfrom, sizes)== false)
-    {
-        printf("error: fail to parse msgCarrier!\n");
-        return 0;
-    }
-    int itype = mc.type();
-    const std::string &msg = mc.message();
-
-	int byteoffset = 0;
-	int64_t timestampsMS;
+	bool bret = false;
+	char sbuff[1024];
     if (itype == PB::MSGCARRIER::MsgCarrier_MsgType_SNAPSHOT)
     {
         PB::Quote::SnapShot snap;
-		if(snap.ParseFromString(msg))
+        bret = snap.ParseFromString(msg);
+        int64_t timestampsMs;
+		if(bret)
 		{
-		    // market or future
-            int format_idx = (snap.exchange() < 3 ? 0 : 1);
-            const int PriceLevel = SnapExts[format_idx].level;
-
-			timestampsMS = CalcMsUTC(snap.date()) + snap.time();
-			int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_market
-			        ,SnapExts[format_idx].measure
+//shot_test,date=20180122,exch=1,code=600331 status=73,lastprice=0.0,prevclose=5.19,open=0.0,high=0.0,low=0.0,volume=0,value=0.0,highlimited=0.0,lowlimited=0.0,niopv=0.0,numtrades=0,totalBidVol=0,totalAskVol=0,askVolume0=0,askVolume1=0,askVolume2=0,askVolume3=0,askVolume4=0,askVolume5=0,askVolume6=0,askVolume7=0,askVolume8=0,askVolume9=0,bidVolume0=0,bidVolume1=0,bidVolume2=0,bidVolume3=0,bidVolume4=0,bidVolume5=0,bidVolume6=0,bidVolume7=0,bidVolume8=0,bidVolume9=0,askPrice0=0.0,askPrice1=0.0,askPrice2=0.0,askPrice3=0.0,askPrice4=0.0,askPrice5=0.0,askPrice6=0.0,askPrice7=0.0,askPrice8=0.0,askPrice9=0.0,bidPrice0=0.0,bidPrice1=0.0,bidPrice2=0.0,bidPrice3=0.0,bidPrice4=0.0,bidPrice5=0.0,bidPrice6=0.0,bidPrice7=0.0,bidPrice8=0.0,bidPrice9=0.0,nWeightedAvgBidPrice=0.0,nWeightedAvgAskPrice=0.0 1516583642361
+			timestampsMs = GetDateSecond(snap.date())*1000 + snap.time();
+			int n_size = snprintf(sbuff, sizeof(sbuff), format_snap
 					,snap.date()
 					,snap.exchange()
 					,snap.code().c_str()
 					,snap.status()
-					,snap.time()
 					,snap.lastprice()
 					,snap.prevclose()
 					,snap.open()
@@ -427,214 +244,113 @@ int UnPackMsg2Str(const void *pfrom, const int sizes, char *pstr)
 					,snap.volume()
 					,snap.value()
 					,snap.highlimited()
-					,snap.lowlimited());
-			byteoffset += n_size;
+					,snap.lowlimited()
+					,snap.niopv()
+					,snap.numtrades()
+					,snap.totalbidvol()
+					,snap.totalaskvol());
 
-			// extend fields
-			if(format_idx == 0)
-			{
-			    n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
-			        ,snap.niopv()
-                    ,snap.numtrades()
-                    ,snap.totalbidvol()
-                    ,snap.totalaskvol()
-                    ,snap.nweightedavgbidprice()
-                    ,snap.nweightedavgaskprice());
-			    byteoffset += n_size;
-			}else{
-			     n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
-                    ,snap.settleprice()
-                    ,snap.prevsettleprice()
-                    ,snap.delta()
-                    ,snap.prevdelta()
-                    ,snap.iopeninterest()
-                    ,snap.prevopeninterest());
-                byteoffset += n_size;
-			}
-
+			result_str->append(sbuff, n_size);
 			int k;
-			//卖一量
+			//askVolume
 			for (k = 0; k < snap.askvolumes_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=%lld", k+1, snap.askvolumes(k));
-				byteoffset += n_size;
+				sprintf(sbuff, ",askVolume%d=%lld", k, snap.askvolumes(k));
+				result_str->append(sbuff);
 			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=0", ++k);
-				byteoffset += n_size;
+			while (k < 10) {
+				sprintf(sbuff, ",askVolume%d=0", k++);
+				result_str->append(sbuff);
 			}
-			//买一量
+			//bidVolume
 			for (k = 0; k < snap.bidvolumes_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=%lld", k+1, snap.bidvolumes(k));
-				byteoffset += n_size;
+				sprintf(sbuff, ",bidVolume%d=%lld", k, snap.bidvolumes(k));
+				result_str->append(sbuff);
 			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=0", ++k);
-				byteoffset += n_size;
+			while (k < 10) {
+				sprintf(sbuff, ",bidVolume%d=0", k++);
+				result_str->append(sbuff);
 			}
-			//卖一价
+			//askPrice
 			for (k = 0; k < snap.askprices_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=%.2f", k+1, snap.askprices(k));
-				byteoffset += n_size;
+				sprintf(sbuff, ",askPrice%d=%.2f", k, snap.askprices(k));
+				result_str->append(sbuff);
 			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=0.0", ++k);
-				byteoffset += n_size;
+			while (k < 10) {
+				sprintf(sbuff, ",askPrice%d=0.0", k++);
+				result_str->append(sbuff);
 			}
-			//买一价
+			//bidPrice
 			for (k = 0; k < snap.bidprices_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=%.2f", k+1, snap.bidprices(k));
-				byteoffset += n_size;
+				sprintf(sbuff, ",bidPrice%d=%.2f", k, snap.bidprices(k));
+				result_str->append(sbuff);
 			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=0.0", ++k);
-				byteoffset += n_size;
+			while (k < 10) {
+				sprintf(sbuff, ",bidPrice%d=0.0", k++);
+				result_str->append(sbuff);
 			}
-			n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",seqno=%llu %lld000000\n" ,snap.seqno(), timestampsMS);
-			byteoffset += n_size;
+
+			sprintf(sbuff, ",nWeightedAvgBidPrice=%.2f,nWeightedAvgAskPrice=%.2f %lld000000\n"
+					,snap.nweightedavgbidprice()
+					,snap.nweightedavgaskprice()
+					,timestampsMs);
+			result_str->append(sbuff);
 		}
 		else
 		{
-			printf("error: fail to parse snapshot!\n");
+			printf("error: fail to parse snapshot!");
 		}
 
 	} else if (itype == PB::MSGCARRIER::MsgCarrier_MsgType_TRANSACTIONS) {
 		PB::Quote::Transactions trans;
-		if (trans.ParseFromString(msg)) {
-//tick,Date=20171227,Exchg=2,SecurityID=150118 TradePrice=0.00,TradeIndex=1324,TradeQty=20000,TradeMoney=0.00,OrdType=48,TradeCode=67,OfferApplSeqNum=1310,BidApplSeqNum=0 1514337301130001324
+		bret = trans.ParseFromString(msg);
+		if (bret) {
+//tick,trade_date=20180122,exch=1,code=601727 price=6.63,nIndex=1,volume=100,turnover=663.0,nBSFlag=0,chOrderKind=48,chFunctionCode=48,nAskOrder=0,nBidOrder=0 1516584300000
+			int64_t timestampsMs;
 			int tran_no;
 			for (int i = 0; i < trans.items_size(); ++i) {
 				auto& pdata = trans.items(i);
-				timestampsMS = CalcMsUTC(pdata.date()) + pdata.time();
+				timestampsMs = GetDateSecond(pdata.date())*1000 + pdata.time();
 				tran_no = (pdata.nindex() < 1000000 ? pdata.nindex():(pdata.nindex()%1000000));
-				int n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, format_tick
+				int n_size = snprintf(sbuff, sizeof(sbuff), format_tick
 						,pdata.date()
 						,pdata.exchange()
 						,pdata.code().c_str()
-						,pdata.time()
-						,pdata.nindex()
 						,pdata.lastprice()
+						,pdata.nindex()
 						,pdata.volume()
 						,pdata.turnover()
+						,pdata.nbsflag()
 						,pdata.chorderkind()
 						,pdata.chfunctioncode()
-						,pdata.nbidorder()
 						,pdata.naskorder()
-						,pdata.seqno()
-						,timestampsMS
+						,pdata.nbidorder()
+						,timestampsMs
 						,tran_no);//reserved after 6 number
-				byteoffset += n_size;
-			}
-			if(trans.items_size()>1)
-			{
-			    printf("\n WARN: maybe parse trans size too long!============>>>>> %d\n", trans.items_size());
+				result_str->append(sbuff, n_size);
 			}
 		} else {
-			printf("error: fail to parse trans!\n");
+			printf("error: fail to parse trans!");
 		}
-	} else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_INDEX)
-	{
-	    PB::Quote::Index idx;
-	    if(idx.ParseFromString(msg))
-	    {
-//index,Date=20171227,Exchg=1,SecurityID=000999 OpenPx=18221344,HighPx=18228986,LowPx=18220479,LastPx=18228054,PrevClosePx=18231449,TotalVolumeTraded=659693,TotalValueTraded=9517583 1514337309000000000
-            timestampsMS = CalcMsUTC(idx.date()) + idx.time();
-            int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_index
-                    ,idx.date()
-                    ,idx.exchange()
-                    ,idx.code().c_str()
-                    ,idx.time()
-                    ,idx.openindex()
-                    ,idx.highindex()
-                    ,idx.lowindex()
-                    ,idx.lastindex()
-                    ,idx.precloseindex()
-                    ,idx.totalvolume()
-                    ,idx.turnover()
-                    ,idx.seqno()
-                    ,timestampsMS);
-            byteoffset += n_size;
-	    }else {
-            printf("error: fail to parse index!");
-        }
-	}else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_ORDER)
-    {
-	    PB::Quote::Order order;
-        if(order.ParseFromString(msg))
-        {
-           //order,Date=20171227,Exchg=2,SecurityID=300036 Price=15.01,ApplSeqNum=1959,OrderQty=500,OrdType=48,TradeCode=66 1514337300050000000
-            timestampsMS = CalcMsUTC(order.date()) + order.time();
-            int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_order
-                    ,order.date()
-                    ,order.exchange()
-                    ,order.code().c_str()
-                    ,order.time()
-                    ,order.nprice()
-                    ,order.norder() //entrust_no
-                    ,order.nvolume()
-                    ,order.chorderkind()
-                    ,order.chfunctioncode()
-                    ,order.seqno()
-                    ,timestampsMS);
-             byteoffset += n_size;
-        }else {
-            printf("error: fail to parse order!\n");
-        }
-    }else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_ORDERQUEUE)
-    {
-        PB::Quote::OrderQueue queue;
-        if(queue.ParseFromString(msg))
-        {
-            // "queue,Date=%d,exch=%d,SecurityID=%s Price=%.2f,NoOrders=%d,Side=%d,nABItems=%d";//OrderQty%d=%d ...%lld
-            timestampsMS = CalcMsUTC(queue.date()) + queue.time();
-            int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_queue
-                    ,queue.date()
-                    ,queue.exchange()
-                    ,queue.code().c_str()
-                    ,queue.time()
-                    ,queue.nprice()
-                    ,queue.norders()
-                    ,queue.nside()
-                    ,queue.nabitems());
-            byteoffset += n_size;
-            int k;
-            int max_volume_cnt = (queue.nabvolume_size() > 50 ? 50 : queue.nabvolume_size());
-            for (k = 0; k < max_volume_cnt; ++k) {
-                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",order_qty%d=%d", k+1, queue.nabvolume(k));
-                byteoffset += n_size;
-            }
-            while (k < 50) {
-                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",order_qty%d=0", ++k);
-                byteoffset += n_size;
-            }
-            n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",seqno=%llu %lld000000\n",queue.seqno(), timestampsMS);
-            byteoffset += n_size;
-        }else {
-            printf("error: fail to parse queue!\n");
-        }
-    }else{
-        printf("error: no support msg type:%d !\n", itype);
-    }
-    return byteoffset;
+	}
+    return bret;
 }
 
-tcp_msg * get_tcp_node(int buffsize)
+udp_msg * get_udp_node(const string* msgsrc)
 {
-    tcp_msg * pNode = nullptr;
-    assert(buffsize > 0);
-    if(buffsize > 0)
+    udp_msg * plist_now = nullptr;
+    int batch_msg_size = msgsrc->size();
+    if(batch_msg_size > 0)
     {
-        pNode = (tcp_msg *) malloc(buffsize);
-        if (pNode) {
-            pNode->pself = nullptr;
-            pNode->capcity = (buffsize - offsetof(tcp_msg, data));
-            pNode->size = 0;
-            pNode->next = nullptr;
+        plist_now = (udp_msg *) malloc( offsetof(udp_msg, data) + batch_msg_size + 10);
+        if (plist_now) {
+            plist_now->len = batch_msg_size;
+            plist_now->next = nullptr;
+            memcpy(plist_now->data, msgsrc->c_str(), batch_msg_size);
         } else {
             printf("error: fail to malloc for udp_msg!\n");
-            assert(0);
         }
     }
-    return pNode;
+    return plist_now;
 }
 
 void Job(uv_work_t *req)
@@ -646,27 +362,36 @@ void Job(uv_work_t *req)
     }
     marketdata_task* ptask = (marketdata_task*)(req->data);
 
+    PB::MSGCARRIER::MsgCarrier mc;
+
     RecordTimeMs timems;
     timems.start();
 
     char *pbuf = ptask->data;
-    int byteoffset = 4;
     int32_t next_msg_size = *((int32_t*)pbuf);
-    tcp_msg * plist_head = nullptr;
-    tcp_msg * plist_tail = nullptr;
-    tcp_msg * pNode = nullptr;
+    int n_read_byte = 4;
+    string result = string();
+    udp_msg * plist_head = nullptr;
+    udp_msg * plist_tail = nullptr;
 
-    int32_t gen_msglen = 0;
-    int32_t send_tcp_packcnt =0;
-    while (byteoffset < ptask->used_bytes) {
-        //malloc node
-        if(pNode == nullptr)
-        {
-            pNode = get_tcp_node(MAX_TCPMSG_SIZE);
-            // fill tcp_header
-            memcpy(pNode->data,ptask->tcp_header, ptask->tcp_header_len);
-            pNode->size = pNode->size + ptask->tcp_header_len;
-            //first
+    int32_t produce_msglen = 0;
+    int32_t send_udp_packcnt =0;
+    while (n_read_byte < ptask->used_bytes) {
+        string msg = string(pbuf + n_read_byte, next_msg_size);
+        n_read_byte += next_msg_size;
+        //printf("=====> %d\n", msgsize);
+        if (mc.ParseFromString(msg)) {
+            UnPackMsg2Str(mc.type(), mc.message(), &result);
+        }
+        next_msg_size = *((int32_t*) (pbuf + n_read_byte));
+        n_read_byte += 4; // 4 byte
+        //over 1200 bytes, create an udp_msg, put into single linked list
+        if (result.size() + next_msg_size > MAX_UDPMSG_SIZE) {
+            ++send_udp_packcnt;
+            produce_msglen += result.size();
+
+            udp_msg * pNode = get_udp_node(&result);
+            //remind single-linked list head
             if (plist_tail == nullptr) {
                 plist_tail = pNode;
                 plist_head = pNode;
@@ -675,87 +400,63 @@ void Job(uv_work_t *req)
                 plist_tail->next = pNode;
                 plist_tail = pNode;
             }
+            result.clear();
         }
-        int n_size = UnPackMsg2Str( (pbuf + byteoffset), next_msg_size, (pNode->data + pNode->size));
-        byteoffset += next_msg_size;
-        next_msg_size = *((int32_t*) (pbuf + byteoffset));
-        byteoffset += 4; // 4 byte
+    }
 
-        pNode->size = pNode->size + n_size;
-        //if surplus buffer size is less than 3K
-        if ((pNode->capcity - pNode->size) < (2 * 1024)) {
-            // fill datalen
-            int tcp_data_len = pNode->size - ptask->tcp_header_len;
-            int dollar_pos = ptask->tcp_dollar_pos;
-            assert( pNode->data[dollar_pos]=='$');
-            while(tcp_data_len >0 && dollar_pos > 0)
-            {
-                pNode->data[dollar_pos]= ((tcp_data_len%10)+'0');
-                tcp_data_len /= 10;
-                dollar_pos--;
-            }
-            ++send_tcp_packcnt;
-            gen_msglen += pNode->size;
-            pNode = nullptr;
+    //last msg
+    if (result.size() > 0) {
+        ++send_udp_packcnt;
+        produce_msglen += result.size();
+
+        udp_msg * pNode = get_udp_node(&result);
+        //remind single-linked list head
+        if (plist_tail == nullptr) {
+            plist_tail = pNode;
+            plist_head = pNode;
+        } else {
+            // point to next, after move next
+            plist_tail->next = pNode;
+            plist_tail = pNode;
         }
     }
-    //be careful! the "content-length" must be fill!
-    if ((plist_tail != nullptr) && (plist_tail->data[ptask->tcp_dollar_pos] == '$'))
-    {
-        int tcp_data_len = plist_tail->size - ptask->tcp_header_len;
-        int dollar_pos = ptask->tcp_dollar_pos;
-        while (tcp_data_len > 0 && dollar_pos > 0) {
-            plist_tail->data[dollar_pos] = ((tcp_data_len % 10) + '0');
-            tcp_data_len /= 10;
-            dollar_pos--;
-        }
-        ++send_tcp_packcnt;
-        gen_msglen += plist_tail->size;
+    //save the head of single-list
+    if(plist_head != nullptr){
+         ptask->udp_msg_ptr = plist_head;
     }
-    //save the head of single-list, plist_head maybe nullptr, nothing
-    ptask->udp_msg_ptr = plist_head;
-    printf("++++ total send tcp_packs count :%d, gen bytes: %d\n", send_tcp_packcnt, gen_msglen);
-    printf("===> Batch packages: %d, speed:%.2f packs/ms.\n", ptask->total_packs, ptask->total_packs/timems.stop());
+    printf("++++ total send udp_packs count :%d, bytes: %d\n", send_udp_packcnt, produce_msglen);
+    printf("===> Batch packages: %d, speed:%.2f packs/ms.\n", ptask->total, ptask->total/timems.stop());
 }
 
 void JobDone(uv_work_t *req, int status) {
     if (!req) {
-        fprintf(stderr, "error: JobDone %s!\n", uv_strerror(status));
+        printf("error: JobDone, invalid req!\n");
         return;
     }
     //Distribute tasks, after release
     if (req->data != nullptr) {
         marketdata_task* ptask = (marketdata_task*) (req->data);
-        tcp_msg * pNode = ptask->udp_msg_ptr;
-        Consumer * pCon = (Consumer *)(ptask->pself);
+        udp_msg * pNode = ptask->udp_msg_ptr;
         while (pNode != nullptr) {
-            /*
-            uv_buf_t buf = uv_buf_init(pNode->data + ptask->tcp_header_len, pNode->size - ptask->tcp_header_len);
+
+            uv_buf_t buf = uv_buf_init(pNode->data, pNode->len);
             uv_udp_send_t* request = (uv_udp_send_t*) malloc(sizeof(uv_udp_send_t));
             request->data = pNode; // for release node
             uv_udp_send(request, (uv_udp_t *) (ptask->udp_hdl), &buf, 1, (const struct sockaddr *) (ptask->udp_addr), on_udp_send);
-            */
 
+            /*
             //TODO async write file
-            uv_buf_t buf = uv_buf_init(pNode->data + ptask->tcp_header_len, pNode->size - ptask->tcp_header_len);
-            //uv_buf_t buf = uv_buf_init(pNode->data , pNode->size);
+            uv_buf_t buf = uv_buf_init(pNode->data, pNode->len);
             uv_fs_t * request = (uv_fs_t*) malloc(sizeof(uv_fs_t));
             request->data = pNode; // for release node
             uv_fs_write(req->loop, request, ptask->file_hdl, &buf, 1, -1, on_write_done);
-
-            // TODO send tcp
-            /* uv_buf_t buf = uv_buf_init(pNode->data, pNode->size);
-            uv_write_t * request = (uv_write_t*) malloc(sizeof(uv_write_t));
-            request->data = pNode; // for release node
-            pNode->pself = pCon->m_tcpConn[pCon->m_index].get();
-            uv_write(request, pCon->m_tcpConn[pCon->m_index]->m_connect->handle , &buf, 1, on_tcp_send);
-            pCon->m_index = (pCon->m_index + 1) % (pCon->m_tcpConn.size()) ;
             */
+
             // move to next
             pNode = pNode->next;
-            ++TOTAL_REDUCE_TCP_PACK;
+            ++TOTAL_REDUCE_UDP_PACK;
         }
-        printf("JobDone: release! distribute TCP pack.\n");
+        printf("JobDone: release! distribute UDP.\n");
         free(req->data);
     }
     free(req);
@@ -765,17 +466,15 @@ void JobDone(uv_work_t *req, int status) {
 void Consumer::OnAsync(uv_async_t* handle)
 {
 	Consumer* self = (Consumer*)(handle->data);
-    std::vector<marketdata_task*> tmpset;
+    vector<marketdata_task*> tmpset;
     uv_mutex_lock(&(self->m_mtx));
     tmpset.swap(self->m_tasks);
     // self->m_tasks.clear();
     uv_mutex_unlock(&(self->m_mtx));
 
 	for (auto ptask : tmpset) {
-	    ptask->pself = self;
-	    ptask->tcp_header = self->m_header;
-	    ptask->tcp_header_len = self->m_headerlen;
-	    ptask->tcp_dollar_pos = self->m_dollarpos;
+	    ptask->udp_addr = self->m_udp_addr;
+	    ptask->udp_hdl = self->m_udp_hdl;
 	    //create a uv_work
 		uv_work_t *request = (uv_work_t*) malloc(sizeof(uv_work_t));
 		request->data = ptask;
@@ -792,5 +491,7 @@ int Consumer::SendAsync(marketdata_task* data)
     m_async_hdl->data = this;
     return uv_async_send(m_async_hdl);
 }
+
+
 
 
