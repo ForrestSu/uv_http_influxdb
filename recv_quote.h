@@ -98,6 +98,7 @@ public:
 	int SendAsync(marketdata_task* data);
 public:
 	std::queue<tcp_msg_tag*> m_msgqueue;
+	std::vector<std::shared_ptr<TcpClient>> m_tcpConn;
 private:
 	static void OnAsync(uv_async_t* handle);
 	static void OnTimer(uv_timer_t* handle);
@@ -113,7 +114,6 @@ private:
 
 	uv_timer_t * m_timer;
 	bool m_timer_stop;
-	std::vector<std::shared_ptr<TcpClient>> m_tcpConn;
 };
 
 
