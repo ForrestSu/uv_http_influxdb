@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
 	std::string saddr = argv[1];
     std::string dbname = argv[2];
 	std::string tcp_addr = argv[3];
-	int tcp_port = atoi(argv[3]);
+	int tcp_port = atoi(argv[4]);
 
 	uv_loop_t* loop =  uv_default_loop();
 
