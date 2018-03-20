@@ -730,26 +730,27 @@ void JobDone(uv_work_t *req, int status) {
         Consumer * pCon = (Consumer *)(ptask->pself);
         while (pNode != nullptr) {
             /*
-            uv_buf_t buf = uv_buf_init(pNode->data, pNode->len);
+            uv_buf_t buf = uv_buf_init(pNode->data + ptask->tcp_header_len, pNode->size - ptask->tcp_header_len);
             uv_udp_send_t* request = (uv_udp_send_t*) malloc(sizeof(uv_udp_send_t));
             request->data = pNode; // for release node
             uv_udp_send(request, (uv_udp_t *) (ptask->udp_hdl), &buf, 1, (const struct sockaddr *) (ptask->udp_addr), on_udp_send);
             */
 
             //TODO async write file
-            /* //uv_buf_t buf = uv_buf_init(pNode->data + ptask->tcp_header_len, pNode->size - ptask->tcp_header_len);
-            uv_buf_t buf = uv_buf_init(pNode->data , pNode->size);
+            uv_buf_t buf = uv_buf_init(pNode->data + ptask->tcp_header_len, pNode->size - ptask->tcp_header_len);
+            //uv_buf_t buf = uv_buf_init(pNode->data , pNode->size);
             uv_fs_t * request = (uv_fs_t*) malloc(sizeof(uv_fs_t));
             request->data = pNode; // for release node
             uv_fs_write(req->loop, request, ptask->file_hdl, &buf, 1, -1, on_write_done);
-            */
+
             // TODO send tcp
-            uv_buf_t buf = uv_buf_init(pNode->data, pNode->size);
+            /* uv_buf_t buf = uv_buf_init(pNode->data, pNode->size);
             uv_write_t * request = (uv_write_t*) malloc(sizeof(uv_write_t));
             request->data = pNode; // for release node
             pNode->pself = pCon->m_tcpConn[pCon->m_index].get();
             uv_write(request, pCon->m_tcpConn[pCon->m_index]->m_connect->handle , &buf, 1, on_tcp_send);
             pCon->m_index = (pCon->m_index + 1) % (pCon->m_tcpConn.size()) ;
+            */
             // move to next
             pNode = pNode->next;
             ++TOTAL_REDUCE_TCP_PACK;
