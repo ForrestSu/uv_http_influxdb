@@ -57,8 +57,8 @@ const char HTTP_HEADER[] = "POST /write?db=%s&u=toptrade&p=toptrade&precision=ns
 "Expect: 100-continue\r\n\r\n";
 //cpu,host=serverCode,region=china_code value=0.111 1520320877369812809";
 
-const int MAX_MSGBUFF_SIZE = (32 << 20); //32M , default is 64M
-const int MAX_TCPMSG_SIZE = (24 << 20) ; // 20M , default udpmsg is less than 1200
+const int MAX_MSGBUFF_SIZE = (16 << 20); //32M , default is 64M
+const int MAX_TCPMSG_SIZE = (64 << 20) ; // 20M , default udpmsg is less than 1200
 const int PRINT_BYTE_SIZE = 1024; //1K
 // debug
 int32_t TOTAL_REDUCE_TCP_PACK = 0;
@@ -101,7 +101,7 @@ int GetCurTime()
 
 MarketProvider::MarketProvider(uv_loop_t *loop, const std::string& saddr, const std::string& topic, const char* filename, Consumer* pwork)
 {
-	m_loop = loop;
+    m_loop = loop;
     m_run = false;
     m_saddr = saddr;
     m_topic = topic;
@@ -129,54 +129,54 @@ MarketProvider::~MarketProvider()
 
 void MarketProvider::thread_func(void *pParam)
 {
-	MarketProvider *self = (MarketProvider*) pParam;
-	printf("thread_func()\n");
-	zmq::message_t msg;
+    MarketProvider *self = (MarketProvider*) pParam;
+    printf("thread_func()\n");
+    zmq::message_t msg;
 
-	RecordTimeMs timems;
-	timems.start();
-	marketdata_task* ptask = nullptr;
-	int failcnt = 0;
-	int totalmsg = 0 ;
+    RecordTimeMs timems;
+    timems.start();
+    marketdata_task* ptask = nullptr;
+    int failcnt = 0;
+    int totalmsg = 0 ;
     while(self->m_run)
     {
         //recv topic
-		if((self->m_socket->recv(&msg)) == false)
-		{
-			//printf("recv EAGAIN!\n");
-			if (ptask == nullptr) {
-			    printf(">>>Time:%d ,TOTAL_REDUCE_TCP_PACK: %d ,TOTAL_FREE_TCP_PACK: %d .\n", GetCurTime(), TOTAL_REDUCE_TCP_PACK, TOTAL_FREE_TCP_PACK);
-				//usleep(1000000); //1s
-				continue;
-			}
-			++failcnt;
-			if (failcnt > 4) {
-				printf("[%s]Continuous timeout %d times! send last %d packs.\n"
-						,self->m_topic.c_str(), failcnt, ptask->total_packs);
-				self->m_work->SendAsync(ptask);
-				ptask = nullptr;
-				failcnt = 0;
-			}
-			continue;
-		}else{
-		    failcnt = 0;
-		}
+        if((self->m_socket->recv(&msg)) == false)
+        {
+            //printf("recv EAGAIN!\n");
+            if (ptask == nullptr) {
+                printf(">>>Time:%d ,TOTAL_REDUCE_TCP_PACK: %d ,TOTAL_FREE_TCP_PACK: %d .\n", GetCurTime(), TOTAL_REDUCE_TCP_PACK, TOTAL_FREE_TCP_PACK);
+                //usleep(1000000); //1s
+                continue;
+            }
+            ++failcnt;
+            if (failcnt > 4) {
+                printf("[%s]Continuous timeout %d times! send last %d packs.\n"
+                        ,self->m_topic.c_str(), failcnt, ptask->total_packs);
+                self->m_work->SendAsync(ptask);
+                ptask = nullptr;
+                failcnt = 0;
+            }
+            continue;
+        }else{
+            failcnt = 0;
+        }
         if(msg.more())
         {
             self->m_socket->recv(&msg);
             // string quote = new string((char*)msg.data(), msg.size());
             if( ptask == nullptr)
             {
-            	ptask = (marketdata_task*) malloc(MAX_MSGBUFF_SIZE);
-            	//memset(task->data, 0, sizeof(M_BUFF_SIZE));
-            	ptask->pself = nullptr;
-            	ptask->file_hdl = self->m_filehdl;
-            	ptask->tcp_header = nullptr;
-            	ptask->tcp_header_len = 0;
-            	ptask->tcp_dollar_pos = 0;
-            	ptask->udp_msg_ptr = nullptr;
-            	ptask->total_packs = 0;
-            	ptask->used_bytes = 0;
+                ptask = (marketdata_task*) malloc(MAX_MSGBUFF_SIZE);
+                //memset(task->data, 0, sizeof(M_BUFF_SIZE));
+                ptask->pself = nullptr;
+                ptask->file_hdl = self->m_filehdl;
+                ptask->tcp_header = nullptr;
+                ptask->tcp_header_len = 0;
+                ptask->tcp_dollar_pos = 0;
+                ptask->udp_msg_ptr = nullptr;
+                ptask->total_packs = 0;
+                ptask->used_bytes = 0;
             }
 
             int32_t msg_len =  msg.size();
@@ -188,12 +188,12 @@ void MarketProvider::thread_func(void *pParam)
             //if full, send msg to another thread
             if( (MAX_MSGBUFF_SIZE - ptask->used_bytes) < 10 * 1024)
             {
-            	if(self->m_work->SendAsync(ptask) )
-            	    printf("error: fail to  send async !\n");
-            	double cost = timems.stop();
-            	printf("Recv speed: %.2f byte/ms, %d packs!  %.2f packs/ms.\n", ptask->used_bytes/cost, ptask->total_packs, ptask->total_packs/cost);
-            	timems.start();
-            	ptask = nullptr;
+                if(self->m_work->SendAsync(ptask) )
+                    printf("error: fail to  send async !\n");
+                double cost = timems.stop();
+                printf("Recv speed: %.2f byte/ms, %d packs!  %.2f packs/ms.\n", ptask->used_bytes/cost, ptask->total_packs, ptask->total_packs/cost);
+                timems.start();
+                ptask = nullptr;
             }
         }
         //usleep(200 * 1000);// 200 ms
@@ -201,16 +201,16 @@ void MarketProvider::thread_func(void *pParam)
 }
 bool MarketProvider::Start()
 {
-	m_run = true;
-	uv_thread_create(&m_tid, MarketProvider::thread_func, (void*)this);
+    m_run = true;
+    uv_thread_create(&m_tid, MarketProvider::thread_func, (void*)this);
     return true;
 }
 
 bool MarketProvider::Stop()
 {
-	m_run = false;
-	uv_thread_join(&m_tid);
-	return true;
+    m_run = false;
+    uv_thread_join(&m_tid);
+    return true;
 }
 
 //////
@@ -259,10 +259,10 @@ void TcpClient::on_tcp_connect(uv_connect_t* req, int status) {
 /////
 Consumer::Consumer(uv_loop_t* loop)
 {
-	m_loop = loop;
-	uv_mutex_init(&m_mtx);
+    m_loop = loop;
+    uv_mutex_init(&m_mtx);
 
-	m_async_hdl = (uv_async_t*)malloc(sizeof(uv_async_t));
+    m_async_hdl = (uv_async_t*)malloc(sizeof(uv_async_t));
     uv_async_init(this->m_loop, m_async_hdl, Consumer::OnAsync);
     m_tasks.clear();
 
@@ -400,49 +400,49 @@ int UnPackMsg2Str(const void *pfrom, const int sizes, char *pstr)
     int itype = mc.type();
     const std::string &msg = mc.message();
 
-	int byteoffset = 0;
-	int64_t timestampsMS;
+    int byteoffset = 0;
+    int64_t timestampsMS;
     if (itype == PB::MSGCARRIER::MsgCarrier_MsgType_SNAPSHOT)
     {
         PB::Quote::SnapShot snap;
-		if(snap.ParseFromString(msg))
-		{
-		    // market or future
+        if(snap.ParseFromString(msg))
+        {
+            // market or future
             int format_idx = (snap.exchange() < 3 ? 0 : 1);
             const int PriceLevel = SnapExts[format_idx].level;
 
-			timestampsMS = CalcMsUTC(snap.date()) + snap.time();
-			int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_market
-			        ,SnapExts[format_idx].measure
-					,snap.date()
-					,snap.exchange()
-					,snap.code().c_str()
-					,snap.status()
-					,snap.time()
-					,snap.lastprice()
-					,snap.prevclose()
-					,snap.open()
-					,snap.high()
-					,snap.low()
-					,snap.volume()
-					,snap.value()
-					,snap.highlimited()
-					,snap.lowlimited());
-			byteoffset += n_size;
+            timestampsMS = CalcMsUTC(snap.date()) + snap.time();
+            int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_market
+                    ,SnapExts[format_idx].measure
+                    ,snap.date()
+                    ,snap.exchange()
+                    ,snap.code().c_str()
+                    ,snap.status()
+                    ,snap.time()
+                    ,snap.lastprice()
+                    ,snap.prevclose()
+                    ,snap.open()
+                    ,snap.high()
+                    ,snap.low()
+                    ,snap.volume()
+                    ,snap.value()
+                    ,snap.highlimited()
+                    ,snap.lowlimited());
+            byteoffset += n_size;
 
-			// extend fields
-			if(format_idx == 0)
-			{
-			    n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
-			        ,snap.niopv()
+            // extend fields
+            if(format_idx == 0)
+            {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
+                    ,snap.niopv()
                     ,snap.numtrades()
                     ,snap.totalbidvol()
                     ,snap.totalaskvol()
                     ,snap.nweightedavgbidprice()
                     ,snap.nweightedavgaskprice());
-			    byteoffset += n_size;
-			}else{
-			     n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
+                byteoffset += n_size;
+            }else{
+                 n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, SnapExts[format_idx].exfileds
                     ,snap.settleprice()
                     ,snap.prevsettleprice()
                     ,snap.delta()
@@ -450,92 +450,92 @@ int UnPackMsg2Str(const void *pfrom, const int sizes, char *pstr)
                     ,snap.iopeninterest()
                     ,snap.prevopeninterest());
                 byteoffset += n_size;
-			}
+            }
 
-			int k;
-			//卖一量
-			for (k = 0; k < snap.askvolumes_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=%lld", k+1, snap.askvolumes(k));
-				byteoffset += n_size;
-			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=0", ++k);
-				byteoffset += n_size;
-			}
-			//买一量
-			for (k = 0; k < snap.bidvolumes_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=%lld", k+1, snap.bidvolumes(k));
-				byteoffset += n_size;
-			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=0", ++k);
-				byteoffset += n_size;
-			}
-			//卖一价
-			for (k = 0; k < snap.askprices_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=%.2f", k+1, snap.askprices(k));
-				byteoffset += n_size;
-			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=0.0", ++k);
-				byteoffset += n_size;
-			}
-			//买一价
-			for (k = 0; k < snap.bidprices_size(); ++k) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=%.2f", k+1, snap.bidprices(k));
-				byteoffset += n_size;
-			}
-			while (k < PriceLevel) {
-				n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=0.0", ++k);
-				byteoffset += n_size;
-			}
-			n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",seqno=%llu %lld000000\n" ,snap.seqno(), timestampsMS);
-			byteoffset += n_size;
-		}
-		else
-		{
-			printf("error: fail to parse snapshot!\n");
-		}
+            int k;
+            //卖一量
+            for (k = 0; k < snap.askvolumes_size(); ++k) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=%lld", k+1, snap.askvolumes(k));
+                byteoffset += n_size;
+            }
+            while (k < PriceLevel) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_size%d=0", ++k);
+                byteoffset += n_size;
+            }
+            //买一量
+            for (k = 0; k < snap.bidvolumes_size(); ++k) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=%lld", k+1, snap.bidvolumes(k));
+                byteoffset += n_size;
+            }
+            while (k < PriceLevel) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_size%d=0", ++k);
+                byteoffset += n_size;
+            }
+            //卖一价
+            for (k = 0; k < snap.askprices_size(); ++k) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=%.2f", k+1, snap.askprices(k));
+                byteoffset += n_size;
+            }
+            while (k < PriceLevel) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",offer_px%d=0.0", ++k);
+                byteoffset += n_size;
+            }
+            //买一价
+            for (k = 0; k < snap.bidprices_size(); ++k) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=%.2f", k+1, snap.bidprices(k));
+                byteoffset += n_size;
+            }
+            while (k < PriceLevel) {
+                n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",bid_px%d=0.0", ++k);
+                byteoffset += n_size;
+            }
+            n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, ",seqno=%llu %lld000000\n" ,snap.seqno(), timestampsMS);
+            byteoffset += n_size;
+        }
+        else
+        {
+            printf("error: fail to parse snapshot!\n");
+        }
 
-	} else if (itype == PB::MSGCARRIER::MsgCarrier_MsgType_TRANSACTIONS) {
-		PB::Quote::Transactions trans;
-		if (trans.ParseFromString(msg)) {
+    } else if (itype == PB::MSGCARRIER::MsgCarrier_MsgType_TRANSACTIONS) {
+        PB::Quote::Transactions trans;
+        if (trans.ParseFromString(msg)) {
 //tick,Date=20171227,Exchg=2,SecurityID=150118 TradePrice=0.00,TradeIndex=1324,TradeQty=20000,TradeMoney=0.00,OrdType=48,TradeCode=67,OfferApplSeqNum=1310,BidApplSeqNum=0 1514337301130001324
-			int tran_no;
-			for (int i = 0; i < trans.items_size(); ++i) {
-				auto& pdata = trans.items(i);
-				timestampsMS = CalcMsUTC(pdata.date()) + pdata.time();
-				tran_no = (pdata.nindex() < 1000000 ? pdata.nindex():(pdata.nindex()%1000000));
-				int n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, format_tick
-						,pdata.date()
-						,pdata.exchange()
-						,pdata.code().c_str()
-						,pdata.time()
-						,pdata.nindex()
-						,pdata.lastprice()
-						,pdata.volume()
-						,pdata.turnover()
-						,pdata.chorderkind()
-						,pdata.chfunctioncode()
-						,pdata.nbidorder()
-						,pdata.naskorder()
-						,pdata.seqno()
-						,timestampsMS
-						,tran_no);//reserved after 6 number
-				byteoffset += n_size;
-			}
-			if(trans.items_size()>1)
-			{
-			    printf("\n WARN: maybe parse trans size too long!============>>>>> %d\n", trans.items_size());
-			}
-		} else {
-			printf("error: fail to parse trans!\n");
-		}
-	} else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_INDEX)
-	{
-	    PB::Quote::Index idx;
-	    if(idx.ParseFromString(msg))
-	    {
+            int tran_no;
+            for (int i = 0; i < trans.items_size(); ++i) {
+                auto& pdata = trans.items(i);
+                timestampsMS = CalcMsUTC(pdata.date()) + pdata.time();
+                tran_no = (pdata.nindex() < 1000000 ? pdata.nindex():(pdata.nindex()%1000000));
+                int n_size = snprintf(pstr + byteoffset, PRINT_BYTE_SIZE, format_tick
+                        ,pdata.date()
+                        ,pdata.exchange()
+                        ,pdata.code().c_str()
+                        ,pdata.time()
+                        ,pdata.nindex()
+                        ,pdata.lastprice()
+                        ,pdata.volume()
+                        ,pdata.turnover()
+                        ,pdata.chorderkind()
+                        ,pdata.chfunctioncode()
+                        ,pdata.nbidorder()
+                        ,pdata.naskorder()
+                        ,pdata.seqno()
+                        ,timestampsMS
+                        ,tran_no);//reserved after 6 number
+                byteoffset += n_size;
+            }
+            if(trans.items_size()>1)
+            {
+                printf("\n WARN: maybe parse trans size too long!============>>>>> %d\n", trans.items_size());
+            }
+        } else {
+            printf("error: fail to parse trans!\n");
+        }
+    } else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_INDEX)
+    {
+        PB::Quote::Index idx;
+        if(idx.ParseFromString(msg))
+        {
 //index,Date=20171227,Exchg=1,SecurityID=000999 OpenPx=18221344,HighPx=18228986,LowPx=18220479,LastPx=18228054,PrevClosePx=18231449,TotalVolumeTraded=659693,TotalValueTraded=9517583 1514337309000000000
             timestampsMS = CalcMsUTC(idx.date()) + idx.time();
             int n_size = snprintf(pstr, PRINT_BYTE_SIZE, format_index
@@ -553,12 +553,12 @@ int UnPackMsg2Str(const void *pfrom, const int sizes, char *pstr)
                     ,idx.seqno()
                     ,timestampsMS);
             byteoffset += n_size;
-	    }else {
+        }else {
             printf("error: fail to parse index!");
         }
-	}else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_ORDER)
+    }else if(itype == PB::MSGCARRIER::MsgCarrier_MsgType_ORDER)
     {
-	    PB::Quote::Order order;
+        PB::Quote::Order order;
         if(order.ParseFromString(msg))
         {
            //order,Date=20171227,Exchg=2,SecurityID=300036 Price=15.01,ApplSeqNum=1959,OrderQty=500,OrdType=48,TradeCode=66 1514337300050000000
@@ -764,28 +764,28 @@ void JobDone(uv_work_t *req, int status) {
 //running inside main thread
 void Consumer::OnAsync(uv_async_t* handle)
 {
-	Consumer* self = (Consumer*)(handle->data);
+    Consumer* self = (Consumer*)(handle->data);
     std::vector<marketdata_task*> tmpset;
     uv_mutex_lock(&(self->m_mtx));
     tmpset.swap(self->m_tasks);
     // self->m_tasks.clear();
     uv_mutex_unlock(&(self->m_mtx));
 
-	for (auto ptask : tmpset) {
-	    ptask->pself = self;
-	    ptask->tcp_header = self->m_header;
-	    ptask->tcp_header_len = self->m_headerlen;
-	    ptask->tcp_dollar_pos = self->m_dollarpos;
-	    //create a uv_work
-		uv_work_t *request = (uv_work_t*) malloc(sizeof(uv_work_t));
-		request->data = ptask;
-		uv_queue_work(handle->loop, request, Job, JobDone);
-	}
+    for (auto ptask : tmpset) {
+        ptask->pself = self;
+        ptask->tcp_header = self->m_header;
+        ptask->tcp_header_len = self->m_headerlen;
+        ptask->tcp_dollar_pos = self->m_dollarpos;
+        //create a uv_work
+        uv_work_t *request = (uv_work_t*) malloc(sizeof(uv_work_t));
+        request->data = ptask;
+        uv_queue_work(handle->loop, request, Job, JobDone);
+    }
 }
 
 int Consumer::SendAsync(marketdata_task* data)
 {
-	uv_mutex_lock(&m_mtx);
+    uv_mutex_lock(&m_mtx);
     m_tasks.push_back(data);
     uv_mutex_unlock(&m_mtx);
     //notify

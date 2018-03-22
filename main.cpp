@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
 	uv_loop_t* loop =  uv_default_loop();
 
 	auto works = new Consumer(loop);
-	works->InitTCP(tcp_addr, dbname, tcp_port, 20); // connect count
+	works->InitTCP(tcp_addr, dbname, tcp_port, 1); // connect count
 
 	auto pMarket = new MarketProvider(loop, saddr, "26.","./market.data", works);
 	auto pTick = new MarketProvider(loop, saddr, "94.", "./tick.data", works);

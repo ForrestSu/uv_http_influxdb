@@ -28,7 +28,7 @@ typedef struct tcp_msg_tag{
     int32_t capcity; // alloc total size
     int32_t size; // used_bytes
     struct tcp_msg_tag *next;
-    char data[1];
+    char data[0];
 }tcp_msg;
 
 //snapshot/tick msg
@@ -42,7 +42,7 @@ typedef struct marketdata_task_tag{
     //
 	int32_t total_packs; //total msg packs
 	int32_t used_bytes;
-	char data[1];
+	char data[0];
 }marketdata_task;
 
 
