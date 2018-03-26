@@ -48,7 +48,7 @@ const char format_tick[] = "tick,trade_date=%d,exchg=%d,security_id=%s trade_tim
 const char format_order[] = "order,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,price=%.2f,appl_seqnum=%d,order_qty=%d,ord_type=%d,trade_code=%d,seqno=%llu %lld000000\n";
 const char format_queue[] = "queue,trade_date=%d,exchg=%d,security_id=%s trade_time=%d,price=%.2f,num_orders=%d,side=%d,no_orders=%d";//OrderQty%d=%d ...%lld
 const char HTTP_HEADER[] = "POST /write?db=%s&u=toptrade&p=toptrade&precision=ns HTTP/1.1\r\n"\
-"Host: %s:%d\r\n"
+"Host: %s:%d\r\n" \
 "Content-Length:        $\r\n" \
 "Connection: Keep-Alive\r\n" \
 "User-Agent: uvHttpClient/1.1\r\n" \
@@ -111,12 +111,12 @@ MarketProvider::MarketProvider(uv_loop_t *loop, const std::string& saddr, const 
     m_tid = 0 ;
     m_work = pwork;
 
-    m_socket->connect(m_saddr);
     m_socket->setsockopt(ZMQ_SUBSCRIBE, topic.c_str(), topic.length());
     int timeout = 1000; //milliseconds
     m_socket->setsockopt(ZMQ_RCVTIMEO, &timeout, sizeof(timeout));
     printf("connect: [%s],  topic: [%s]! set timeout %d ms.\n", m_saddr.c_str(), topic.c_str(), timeout);
-
+    m_socket->connect(m_saddr);
+    
     uv_fs_t req;
     m_filehdl = uv_fs_open(m_loop, &req, filename, O_CREAT | O_TRUNC | O_WRONLY, 0644, nullptr);
     uv_fs_req_cleanup(&req);
